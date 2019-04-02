@@ -15,9 +15,17 @@ Including another URLconf
 """
 from django.conf.urls import url
 from VisReco import views
+from django.views.generic.base import RedirectView
+
+
 # from django.contrib import admin
 
 urlpatterns = [
     # url(r'^admin/', admin.site.urls),
+    url('story', views.story),
+    url('crime', views.crime),
+    url('index', views.index),
+    url('titan', views.titan),
+    url('favicon.ico',  RedirectView.as_view(url=r'static/icon.png')),
     url('', views.index)
 ]
