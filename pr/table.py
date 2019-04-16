@@ -1,6 +1,7 @@
 import datetime
 from features import Features, Type
 from view import View, Chart
+from ml.timer import venloji_timer
 
 month = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'June', 'July', 'Aug', 'Sept', 'Oct', 'Nov', 'Dec']
 
@@ -106,149 +107,149 @@ class Table(object):
         f.interval = 'TIME'
 
     def generateViews(self):
-        T = map(list, zip(*self.D))
-        if self.transformed:
-            for column_id in range(self.column_num):
-                f = Features(self.names[column_id], self.types[column_id], self.origins[column_id])
-                # calculate min,max for numerical
-                if f.type == Type.numerical:
-                    if self.classify_num == 1 or not self.describe2:  # not categorized or categorized scatter
+        with venloji_timer('  -1. Feature extraction'):
+            T = map(list, zip(*self.D))
+            if self.transformed:
+                for column_id in range(self.column_num):
+                    f = Features(self.names[column_id], self.types[column_id], self.origins[column_id])
+                    # calculate min,max for numerical
+                    if f.type == Type.numerical:
+                        if self.classify_num == 1 or not self.describe2:  # not categorized or categorized scatter
+                            f.min, f.max = min(T[column_id]), max(T[column_id])
+                            f.minmin = f.min
+                            if f.min == f.max:
+                                self.types[column_id] = f.type = Type.none
+                                self.features.append(f)
+                                continue
+                        else:
+                            delta = self.tuple_num / self.classify_num
+                            f.min = [min(T[column_id][class_id * delta:(class_id + 1) * delta]) for class_id in
+                                     range(self.classify_num)]
+                            f.minmin = min(f.min)
+                            f.max = [max(T[column_id][class_id * delta:(class_id + 1) * delta]) for class_id in
+                                     range(self.classify_num)]
+                            if sum([f.max[class_id] - f.min[class_id] for class_id in range(self.classify_num)]) == 0:
+                                self.types[column_id] = f.type = Type.none
+                                self.features.append(f)
+                                continue
+                            if min(f.min) == max(f.min) and min(f.max) == max(f.max):
+                                if sum([0 if T[column_id][class_id * delta:(class_id + 1) * delta] == T[column_id][(class_id + 1) * delta:(class_id + 2) * delta] else 1
+                                        for class_id in range(self.classify_num - 1)]) == 0:
+                                    self.types[column_id] = f.type = Type.none
+                                    self.features.append(f)
+                                    continue
+
+                    # calculate distinct,ratio for categorical,temporal
+                    if f.type == Type.categorical or f.type == Type.temporal:
+                        f.distinct = self.tuple_num
+                        f.ratio = 1.0
+
+                    self.features.append(f)
+            else:
+                for column_id in range(self.column_num):
+                    f = Features(self.names[column_id], self.types[column_id], self.origins[column_id])
+
+                    # calculate min,max for numerical,temporal
+                    if f.type == Type.numerical or f.type == Type.temporal:
                         f.min, f.max = min(T[column_id]), max(T[column_id])
                         f.minmin = f.min
                         if f.min == f.max:
                             self.types[column_id] = f.type = Type.none
                             self.features.append(f)
                             continue
-                    else:
-                        delta = self.tuple_num / self.classify_num
-                        f.min = [min(T[column_id][class_id * delta:(class_id + 1) * delta]) for class_id in
-                                 range(self.classify_num)]
-                        f.minmin = min(f.min)
-                        f.max = [max(T[column_id][class_id * delta:(class_id + 1) * delta]) for class_id in
-                                 range(self.classify_num)]
-                        if sum([f.max[class_id] - f.min[class_id] for class_id in range(self.classify_num)]) == 0:
+
+                    d = {}
+                    # calculate distinct,ratio for categorical,temporal
+                    if f.type == Type.categorical or f.type == Type.temporal:
+                        for i in range(self.tuple_num):
+                            if self.D[i][column_id] in d:
+                                d[self.D[i][column_id]] += 1
+                            else:
+                                d[self.D[i][column_id]] = 1
+                        f.distinct = len(d)
+                        if f.distinct == 1:
                             self.types[column_id] = f.type = Type.none
                             self.features.append(f)
                             continue
-                        if min(f.min) == max(f.min) and min(f.max) == max(f.max):
-                            if sum([0 if T[column_id][class_id * delta:(class_id + 1) * delta] == T[column_id][(
-                                                                                                                       class_id + 1) * delta:(
-                                                                                                                                                     class_id + 2) * delta] else 1
-                                    for class_id in range(self.classify_num - 1)]) == 0:
-                                self.types[column_id] = f.type = Type.none
-                                self.features.append(f)
-                                continue
+                        f.ratio = 1.0 * f.distinct / self.tuple_num
+                        f.distinct_values = [(k, d[k]) for k in sorted(d)]
+                        if f.type == Type.temporal:
+                            self.getIntervalBins(f)
 
-                # calculate distinct,ratio for categorical,temporal
-                if f.type == Type.categorical or f.type == Type.temporal:
-                    f.distinct = self.tuple_num
-                    f.ratio = 1.0
+                    self.features.append(f)
 
-                self.features.append(f)
-        else:
-            for column_id in range(self.column_num):
-                f = Features(self.names[column_id], self.types[column_id], self.origins[column_id])
-
-                # calculate min,max for numerical,temporal
-                if f.type == Type.numerical or f.type == Type.temporal:
-                    f.min, f.max = min(T[column_id]), max(T[column_id])
-                    f.minmin = f.min
-                    if f.min == f.max:
-                        self.types[column_id] = f.type = Type.none
-                        self.features.append(f)
-                        continue
-
-                d = {}
-                # calculate distinct,ratio for categorical,temporal
-                if f.type == Type.categorical or f.type == Type.temporal:
-                    for i in range(self.tuple_num):
-                        if self.D[i][column_id] in d:
-                            d[self.D[i][column_id]] += 1
-                        else:
-                            d[self.D[i][column_id]] = 1
-                    f.distinct = len(d)
-                    if f.distinct == 1:
-                        self.types[column_id] = f.type = Type.none
-                        self.features.append(f)
-                        continue
-                    f.ratio = 1.0 * f.distinct / self.tuple_num
-                    f.distinct_values = [(k, d[k]) for k in sorted(d)]
-                    if f.type == Type.temporal:
-                        self.getIntervalBins(f)
-
-                self.features.append(f)
-
+        with venloji_timer('  -2. View combination'):
         # generate 2D views
-        if self.describe2 == '' and self.classify_id == -1:
-            for i in range(self.column_num):
-                for j in range(self.column_num):
-                    if i == j:
-                        continue
+            if self.describe2 == '' and self.classify_id == -1:
+                for i in range(self.column_num):
+                    for j in range(self.column_num):
+                        if i == j:
+                            continue
 
-                    fi = self.features[i]
-                    fj = self.features[j]
-                    if fi.type == Type.categorical and fj.type == Type.numerical and fi.ratio == 1.0:
-                        charts = []
-                        if fj.minmin > 0 and fi.distinct <= 5 and not (
-                                len(fj.name) >= 6 and fj.name[0:4] == 'AVG(' and fj.name[-1] == ')'):
-                            charts.append(Chart.pie)
-                        if fi.distinct <= 20:
-                            charts.append(Chart.bar)
-                    elif fi.type == Type.temporal and fj.type == Type.numerical and fi.ratio == 1.0:
-                        charts = []
-                        if fi.distinct < 7:
-                            charts.append(Chart.bar)
+                        fi = self.features[i]
+                        fj = self.features[j]
+                        if fi.type == Type.categorical and fj.type == Type.numerical and fi.ratio == 1.0:
+                            charts = []
+                            if fj.minmin > 0 and fi.distinct <= 5 and not (
+                                    len(fj.name) >= 6 and fj.name[0:4] == 'AVG(' and fj.name[-1] == ')'):
+                                charts.append(Chart.pie)
+                            if fi.distinct <= 20:
+                                charts.append(Chart.bar)
+                        elif fi.type == Type.temporal and fj.type == Type.numerical and fi.ratio == 1.0:
+                            charts = []
+                            if fi.distinct < 7:
+                                charts.append(Chart.bar)
+                            else:
+                                charts.append(Chart.line)
+                        elif (not self.transformed) and fi.type == Type.numerical and fj.type == Type.numerical and i < j:
+                            charts = [Chart.scatter]
                         else:
-                            charts.append(Chart.line)
-                    elif (not self.transformed) and fi.type == Type.numerical and fj.type == Type.numerical and i < j:
-                        charts = [Chart.scatter]
-                    else:
-                        charts = []
+                            charts = []
 
-                    for chart in charts:
-                        v = View(self, i, j, -1, 1, [T[i]], [T[j]], chart)
-                        self.views.append(v)
-                        self.view_num += 1
-        # generate 3D views
-        elif self.describe2:
-            for i in range(self.column_num):
-                for j in range(self.column_num):
-                    fi = self.features[i]
-                    fj = self.features[j]
-                    if fi.type == Type.categorical and fj.type == Type.numerical and fj.minmin > 0:
-                        charts = [Chart.bar]
-                    elif fi.type == Type.temporal and fj.type == Type.numerical:
-                        if self.tuple_num / self.classify_num < 7:
+                        for chart in charts:
+                            v = View(self, i, j, -1, 1, [T[i]], [T[j]], chart)
+                            self.views.append(v)
+                            self.view_num += 1
+            # generate 3D views
+            elif self.describe2:
+                for i in range(self.column_num):
+                    for j in range(self.column_num):
+                        fi = self.features[i]
+                        fj = self.features[j]
+                        if fi.type == Type.categorical and fj.type == Type.numerical and fj.minmin > 0:
                             charts = [Chart.bar]
+                        elif fi.type == Type.temporal and fj.type == Type.numerical:
+                            if self.tuple_num / self.classify_num < 7:
+                                charts = [Chart.bar]
+                            else:
+                                charts = [Chart.line]
                         else:
-                            charts = [Chart.line]
-                    else:
-                        charts = []
-                    for chart in charts:
-                        delta = self.tuple_num / self.classify_num
-                        series_data = [T[j][series * delta:(series + 1) * delta] for series in range(self.classify_num)]
-                        v = View(self, i, j, self.classify_id, self.classify_num, [T[i][0:delta]], series_data, chart)
+                            charts = []
+                        for chart in charts:
+                            delta = self.tuple_num / self.classify_num
+                            series_data = [T[j][series * delta:(series + 1) * delta] for series in range(self.classify_num)]
+                            v = View(self, i, j, self.classify_id, self.classify_num, [T[i][0:delta]], series_data, chart)
+                            self.views.append(v)
+                            self.view_num += 1
+            else:
+                for i in range(self.column_num):
+                    for j in range(self.column_num):
+                        if i >= j or self.types[i] != Type.numerical or self.types[j] != Type.numerical:
+                            continue
+                        X = []
+                        Y = []
+                        id = 0
+                        for k in range(self.classify_num):
+                            x = T[i][id:id + self.classes[k][1]]
+                            y = T[j][id:id + self.classes[k][1]]
+                            id += self.classes[k][1]
+                            X.append(x)
+                            Y.append(y)
+                        v = View(self, i, j, self.classify_id, self.classify_num, X, Y, Chart.scatter)
                         self.views.append(v)
                         self.view_num += 1
-        else:
-            for i in range(self.column_num):
-                for j in range(self.column_num):
-                    if i >= j or self.types[i] != Type.numerical or self.types[j] != Type.numerical:
-                        continue
-                    X = []
-                    Y = []
-                    id = 0
-                    for k in range(self.classify_num):
-                        x = T[i][id:id + self.classes[k][1]]
-                        y = T[j][id:id + self.classes[k][1]]
-                        id += self.classes[k][1]
-                        X.append(x)
-                        Y.append(y)
-                    v = View(self, i, j, self.classify_id, self.classify_num, X, Y, Chart.scatter)
-                    self.views.append(v)
-                    self.view_num += 1
 
-        self.instance.view_num += self.view_num
+            self.instance.view_num += self.view_num
 
     def dealWithGroup(self, column_id, begin, end, get_head, get_data):
         new_table = Table(self.instance, True, 'GROUP BY ' + self.names[column_id], '')
@@ -476,64 +477,65 @@ class Table(object):
         if self.transformed:
             return new_tables
 
-        for i in range(self.column_num):
-            if self.features[i].ratio < 1.0 and (self.types[i] == Type.temporal or (
-                    self.types[i] == Type.categorical and self.features[i].distinct <= 20)):
-                new_tables.append(self.dealWithGroup(i, 0, self.tuple_num, True, True))
+        with venloji_timer('  -3. Transformation enumeration'):
+            for i in range(self.column_num):
+                if self.features[i].ratio < 1.0 and (self.types[i] == Type.temporal or (
+                        self.types[i] == Type.categorical and self.features[i].distinct <= 20)):
+                    new_tables.append(self.dealWithGroup(i, 0, self.tuple_num, True, True))
 
-            if self.types[i] == Type.temporal:
-                new_tables.append(self.dealWithIntervalBin(i, 0, self.tuple_num, True, True))
-                new_tables.append(self.dealWithWeekBin(i, 0, self.tuple_num, True, True))
-                if type(self.features[i].minmin) != type(datetime.date(1995, 10, 11)):
-                    new_tables.append(self.dealWithHourBin(i, 0, self.tuple_num, True, True))
+                if self.types[i] == Type.temporal:
+                    new_tables.append(self.dealWithIntervalBin(i, 0, self.tuple_num, True, True))
+                    new_tables.append(self.dealWithWeekBin(i, 0, self.tuple_num, True, True))
+                    if type(self.features[i].minmin) != type(datetime.date(1995, 10, 11)):
+                        new_tables.append(self.dealWithHourBin(i, 0, self.tuple_num, True, True))
 
-            if self.types[i] == Type.numerical and self.features[i].minmin < 0:
-                new_tables.append(self.dealWithPNBin(i, 0, self.tuple_num, True, True))
+                if self.types[i] == Type.numerical and self.features[i].minmin < 0:
+                    new_tables.append(self.dealWithPNBin(i, 0, self.tuple_num, True, True))
 
-        for i in range(self.column_num):
-            if self.types[i] != Type.categorical or self.features[i].distinct > 6:
-                continue
-            self.D.sort(key=lambda tuple: tuple[i])
-            ######for categorized scatter########
-            new_table = Table(self.instance, True, 'GROUP BY ' + self.names[i], '')
-            new_table.tuple_num = self.tuple_num
-            new_table.D = [[] for tuple in range(self.tuple_num)]
-            new_table.classify_id = i
-            new_table.classify_num = self.features[i].distinct
-            new_table.classes = self.features[i].distinct_values
-            for j in range(self.column_num):
-                if self.types[j] == Type.numerical:
-                    new_table.names.append(self.names[j])
-                    new_table.types.append(Type.numerical)
-                    new_table.origins.append(j)
-                    new_table.column_num += 1
-                    for k in range(self.tuple_num):
-                        new_table.D[k].append(self.D[k][j])
-            new_tables.append(new_table)
-            ######for categorized scatter########
-            for j in range(self.column_num):
-                if i == j:
+            for i in range(self.column_num):
+                if self.types[i] != Type.categorical or self.features[i].distinct > 12:
                     continue
-                if (self.types[j] == Type.categorical and self.features[j].distinct <= 20) or self.types[
-                    j] == Type.temporal:
-                    s = set()
-                    for k in range(self.tuple_num):
-                        s.add((self.D[k][i], self.D[k][j]))
-                    if len(s) > self.features[j].distinct and ((self.types[j] == Type.categorical and self.features[
-                        i].distinct <= self.features[j].distinct) or self.types[j] == Type.temporal):
-                        if len(s) == self.instance.tuple_num:
-                            new_table = self.getClassifyTable(i, j, self.dealWithGroup, False)
-                        else:
-                            new_table = self.getClassifyTable(i, j, self.dealWithGroup, True)
-                        new_tables.append(new_table)
+                self.D.sort(key=lambda tuple: tuple[i])
+                ######for categorized scatter########
+                new_table = Table(self.instance, True, 'GROUP BY ' + self.names[i], '')
+                new_table.tuple_num = self.tuple_num
+                new_table.D = [[] for tuple in range(self.tuple_num)]
+                new_table.classify_id = i
+                new_table.classify_num = self.features[i].distinct
+                new_table.classes = self.features[i].distinct_values
+                for j in range(self.column_num):
+                    if self.types[j] == Type.numerical:
+                        new_table.names.append(self.names[j])
+                        new_table.types.append(Type.numerical)
+                        new_table.origins.append(j)
+                        new_table.column_num += 1
+                        for k in range(self.tuple_num):
+                            new_table.D[k].append(self.D[k][j])
+                new_tables.append(new_table)
+                ######for categorized scatter########
+                for j in range(self.column_num):
+                    if i == j:
+                        continue
+                    if (self.types[j] == Type.categorical and self.features[j].distinct <= 20) or self.types[
+                        j] == Type.temporal:
+                        s = set()
+                        for k in range(self.tuple_num):
+                            s.add((self.D[k][i], self.D[k][j]))
+                        if len(s) > self.features[j].distinct and ((self.types[j] == Type.categorical and self.features[
+                            i].distinct <= self.features[j].distinct) or self.types[j] == Type.temporal):
+                            if len(s) == self.instance.tuple_num:
+                                new_table = self.getClassifyTable(i, j, self.dealWithGroup, False)
+                            else:
+                                new_table = self.getClassifyTable(i, j, self.dealWithGroup, True)
+                            new_tables.append(new_table)
 
-                if self.types[j] == Type.temporal:
-                    new_tables.append(self.getClassifyTable(i, j, self.dealWithIntervalBin, True))
-                    new_tables.append(self.getClassifyTable(i, j, self.dealWithWeekBin, True))
-                    if type(self.features[j].minmin) != type(datetime.date(1995, 10, 11)):
-                        new_tables.append(self.getClassifyTable(i, j, self.dealWithHourBin, True))
+                    if self.types[j] == Type.temporal:
+                        new_tables.append(self.getClassifyTable(i, j, self.dealWithIntervalBin, True))
+                        new_tables.append(self.getClassifyTable(i, j, self.dealWithWeekBin, True))
+                        if type(self.features[j].minmin) != type(datetime.date(1995, 10, 11)):
+                            new_tables.append(self.getClassifyTable(i, j, self.dealWithHourBin, True))
 
-                if self.types[j] == Type.numerical and self.features[j].minmin < 0:
-                    new_tables.append(self.getClassifyTable(i, j, self.dealWithPNBin, True))
+                    if self.types[j] == Type.numerical and self.features[j].minmin < 0:
+                        new_tables.append(self.getClassifyTable(i, j, self.dealWithPNBin, True))
 
-        return new_tables
+            return new_tables

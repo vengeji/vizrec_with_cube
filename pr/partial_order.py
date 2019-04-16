@@ -39,13 +39,14 @@ def execute(*argv):
 
         # get all views and their score
         with venloji_timer('Solve'):
-            with venloji_timer('Solve---Enumerate Tables'):
+            with venloji_timer('-Enumerate Tables'):
                 instance.addTables(instance.tables[0].dealWithTable())
                 begin_id = 1
-            with venloji_timer('Solve---Get Top Views'):
                 while begin_id < instance.table_num:
                     instance.tables[begin_id].dealWithTable()
                     begin_id += 1
+
+            with venloji_timer('-Get Top Views'):
                 if instance.view_num == 0:
                     print '{}'
                     sys.exit(0)
