@@ -2,6 +2,7 @@ import datetime
 from features import Features, Type
 from view import View, Chart
 from ml.timer import venloji_timer
+import sqlalchemy as sa
 
 month = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'June', 'July', 'Aug', 'Sept', 'Oct', 'Nov', 'Dec']
 
@@ -41,18 +42,21 @@ class Table(object):
                     for i in range(minSecond, maxSecond + 1):
                         t = datetime.datetime(minTime.year, minTime.month, minTime.day, minHour, minMinute, i)
                         bins.append([str(i) + 's', t, t, 0])
+                    f.interval = 'SECOND'
                 else:
                     # interval = 'MINUTE'
                     for i in range(minMinute, maxMinute + 1):
                         t1 = datetime.datetime(minTime.year, minTime.month, minTime.day, minHour, i, 0)
                         t2 = datetime.datetime(minTime.year, minTime.month, minTime.day, minHour, i, 59)
                         bins.append([str(i) + 'm', t1, t2, 0])
+                    f.interval = 'MINUTE'
             else:
                 # interval = 'HOUR'
                 for i in range(minHour, maxHour + 1):
                     t1 = datetime.datetime(minTime.year, minTime.month, minTime.day, i, 0, 0)
                     t2 = datetime.datetime(minTime.year, minTime.month, minTime.day, i, 59, 59)
                     bins.append([str(i) + ' oclock', t1, t2, 0])
+                f.interval = 'HOUR'
         else:
             minYear = minTime.year
             minMonth = minTime.month
@@ -67,6 +71,7 @@ class Table(object):
                         bins.append(
                             [str(i) + 'th', datetime.date(minYear, minMonth, i), datetime.date(minYear, minMonth, i),
                              0])
+                    f.interval = 'DAY'
                 else:
                     # interval = 'MONTH'
                     for i in range(minMonth, maxMonth):
@@ -77,6 +82,7 @@ class Table(object):
                     else:
                         bins.append([month[maxMonth], datetime.date(minYear, maxMonth, 1),
                                      datetime.date(minYear, maxMonth + 1, 1) - datetime.timedelta(1), 0])
+                    f.interval = 'MONTH'
             else:
                 # interval = 'YEAR'
                 yearNum = maxYear - minYear + 1
@@ -102,11 +108,11 @@ class Table(object):
                 else:
                     for i in range(minYear, maxYear + 1):
                         bins.append([str(i), datetime.date(i, 1, 1), datetime.date(i, 12, 31), 0])
+                f.interval = 'YEAR'
         f.interval_bins = bins
         f.bin_num = len(bins)
-        f.interval = 'TIME'
 
-    def generateViews(self):
+    def generateViews(self, kylin_engine=None):
         with venloji_timer('  -1. Feature extraction'):
             T = map(list, zip(*self.D))
             if self.transformed:
@@ -151,30 +157,45 @@ class Table(object):
 
                     # calculate min,max for numerical,temporal
                     if f.type == Type.numerical or f.type == Type.temporal:
-                        f.min, f.max = min(T[column_id]), max(T[column_id])
+                        results = [e for e in kylin_engine.execute('select min({0}), max({0}) from websales2005_season1'.format(self.names[column_id]))]
+                        f.min, f.max = results[0][0], results[0][1]
                         f.minmin = f.min
                         if f.min == f.max:
                             self.types[column_id] = f.type = Type.none
                             self.features.append(f)
                             continue
 
-                    d = {}
+                    # d = {}
                     # calculate distinct,ratio for categorical,temporal
-                    if f.type == Type.categorical or f.type == Type.temporal:
-                        for i in range(self.tuple_num):
-                            if self.D[i][column_id] in d:
-                                d[self.D[i][column_id]] += 1
-                            else:
-                                d[self.D[i][column_id]] = 1
-                        f.distinct = len(d)
+                    if f.type == Type.categorical :
+                        results = [e for e in kylin_engine.execute('select count(distinct {0}) from websales2005_season1'.format(self.names[column_id]))]
+                        f.distinct = results[0][0]
                         if f.distinct == 1:
                             self.types[column_id] = f.type = Type.none
                             self.features.append(f)
                             continue
                         f.ratio = 1.0 * f.distinct / self.tuple_num
-                        f.distinct_values = [(k, d[k]) for k in sorted(d)]
-                        if f.type == Type.temporal:
-                            self.getIntervalBins(f)
+                        f.distinct_values = [e for e in kylin_engine.execute('select {0} from websales2005_season1 group by {0}'.format(self.names[column_id]))]
+
+                    if f.type == Type.temporal:
+                        self.getIntervalBins(f)
+                        interval = f.interval
+                        sql = ''
+                        if interval == 'YEAR':
+                            sql = 'select YEAR({}) from websales2005_season1 group by YEAR({})'
+                        elif interval == 'MONTH':
+                            sql = 'select MONTH({}) from websales2005_season1 group by MONTH({})'
+                        elif interval == 'DAY':
+                            sql = 'select DAYOFMONTH({}) from websales2005_season1 group by DAYOFMONTH({})'
+                        elif interval == 'HOUR':
+                            sql = 'select HOUR({}) from websales2005_season1 group by HOUR({})'
+                        elif interval == 'MINUTE':
+                            sql = 'select MINUTE({}) from websales2005_season1 group by MINUTE({})'
+                        elif interval == 'SECOND':
+                            sql = 'select SECOND({}) from websales2005_season1 group by SECOND({})'
+
+                        f.distinct_values = [e for e in kylin_engine.execute(sql.format(self.names[column_id], self.names[column_id]))]
+                        f.distinct = len(f.distinct_values)
 
                     self.features.append(f)
 
@@ -201,8 +222,8 @@ class Table(object):
                                 charts.append(Chart.bar)
                             else:
                                 charts.append(Chart.line)
-                        elif (not self.transformed) and fi.type == Type.numerical and fj.type == Type.numerical and i < j:
-                            charts = [Chart.scatter]
+                        # elif (not self.transformed) and fi.type == Type.numerical and fj.type == Type.numerical and i < j:
+                        #     charts = [Chart.scatter]
                         else:
                             charts = []
 
@@ -251,7 +272,7 @@ class Table(object):
 
             self.instance.view_num += self.view_num
 
-    def dealWithGroup(self, column_id, begin, end, get_head, get_data):
+    def dealWithGroup(self, column_id, begin, end, get_head, get_data, kylin_engine=None):
         new_table = Table(self.instance, True, 'GROUP BY ' + self.names[column_id], '')
         if get_head:
             new_table.column_num = 1
@@ -273,36 +294,41 @@ class Table(object):
             new_table.types.append(self.types[column_id])
             new_table.origins.append(column_id)
         if get_data:
-            d = {}
-            num = 1  # numerical column number
-            for i in range(0, self.features[column_id].distinct):
-                d[self.features[column_id].distinct_values[i][0]] = [0]
-            for i in range(begin, end):
-                d[self.D[i][column_id]][0] += 1
-            for i in range(self.column_num):
-                if self.types[i] == Type.numerical:
-                    num += 2
-                    for k in d:
-                        d[k].extend([0, 0])
-            for i in range(begin, end):
-                sum_column = 1
-                for j in range(self.column_num):
-                    if self.types[j] == Type.numerical:
-                        d[self.D[i][column_id]][sum_column] += self.D[i][j]
-                        sum_column += 2
-            for k in d:
-                for i in range(1, num, 2):
-                    if d[k][0]:
-                        d[k][i + 1] = 1.0 * d[k][i] / d[k][0]
-            for k in d:
-                l = d[k]
-                l.append(k)
-                new_table.D.append(l)
+            # d = {}
+            # num = 1  # numerical column number
+            # for i in range(0, self.features[column_id].distinct):
+            #     d[self.features[column_id].distinct_values[i][0]] = [0]
+            # for i in range(begin, end):
+            #     d[self.D[i][column_id]][0] += 1
+            # for i in range(self.column_num):
+            #     if self.types[i] == Type.numerical:
+            #         num += 2
+            #         for k in d:
+            #             d[k].extend([0, 0])
+            # for i in range(begin, end):
+            #     sum_column = 1
+            #     for j in range(self.column_num):
+            #         if self.types[j] == Type.numerical:
+            #             d[self.D[i][column_id]][sum_column] += self.D[i][j]
+            #             sum_column += 2
+            # for k in d:
+            #     for i in range(1, num, 2):
+            #         if d[k][0]:
+            #             d[k][i + 1] = 1.0 * d[k][i] / d[k][0]
+            # for k in d:
+            #     l = d[k]
+            #     l.append(k)
+            #     new_table.D.append(l)
+            results = [e for e in kylin_engine.execute(
+                'select count({}),{},{},{},{},{} from websales2005_season1 group by {}'
+                    .format(new_table.names[5], new_table.names[1], new_table.names[2], new_table.names[3], new_table.names[4], new_table.names[5], new_table.names[5]))]
+            for item in results:
+                new_table.D.append(list(item))
             if self.features[column_id].type == Type.temporal:
                 new_table.D.sort(key=lambda l: l[-1])
         return new_table
 
-    def dealWithIntervalBin(self, column_id, begin, end, get_head, get_data):
+    def dealWithIntervalBin(self, column_id, begin, end, get_head, get_data, kylin_engine=None):
         bins = self.features[column_id].interval_bins
         bin_num = self.features[column_id].bin_num
         interval = self.features[column_id].interval
@@ -323,34 +349,56 @@ class Table(object):
             new_table.types.extend([Type.numerical, Type.temporal])
             new_table.origins.extend([column_id, column_id])
         if get_data:
-            num = 0
-            new_table.D = [[] for i in range(bin_num)]
-            for i in range(self.column_num):
-                if self.types[i] == Type.numerical:
-                    num += 2
-                    for j in range(bin_num):
-                        new_table.D[j].extend([0, 0])
-            for i in range(begin, end):
-                date = self.D[i][column_id]
-                if type(date) != type(bins[0][1]):
-                    date = datetime.date(date.year, date.month, date.day)
-                for j in range(bin_num):
-                    if bins[j][1] <= date <= bins[j][2]:
-                        bins[j][3] += 1
-                        sum_column = 0
-                        for k in range(self.column_num):
-                            if self.types[k] == Type.numerical:
-                                new_table.D[j][sum_column] += self.D[i][k]
-                                sum_column += 2
-                        break
-            for i in range(bin_num):
-                for j in range(0, num, 2):
-                    if bins[i][3]:
-                        new_table.D[i][j + 1] = 1.0 * new_table.D[i][j] / bins[i][3]
-                new_table.D[i].extend([bins[i][3], bins[i][0]])
+            # num = 0
+            # new_table.D = [[] for i in range(bin_num)]
+            # for i in range(self.column_num):
+            #     if self.types[i] == Type.numerical:
+            #         num += 2
+            #         for j in range(bin_num):
+            #             new_table.D[j].extend([0, 0])
+            # for i in range(begin, end):
+            #     date = self.D[i][column_id]
+            #     if type(date) != type(bins[0][1]):
+            #         date = datetime.date(date.year, date.month, date.day)
+            #     for j in range(bin_num):
+            #         if bins[j][1] <= date <= bins[j][2]:
+            #             bins[j][3] += 1
+            #             sum_column = 0
+            #             for k in range(self.column_num):
+            #                 if self.types[k] == Type.numerical:
+            #                     new_table.D[j][sum_column] += self.D[i][k]
+            #                     sum_column += 2
+            #             break
+            # for i in range(bin_num):
+            #     for j in range(0, num, 2):
+            #         if bins[i][3]:
+            #             new_table.D[i][j + 1] = 1.0 * new_table.D[i][j] / bins[i][3]
+            #     new_table.D[i].extend([bins[i][3], bins[i][0]])
+            sql = ''
+            if interval == 'YEAR':
+                sql = 'select {},{},{},{},count({}) from websales2005_season1 group by YEAR({})'
+            elif interval == 'MONTH':
+                sql = 'select {},{},{},{},count({}) from websales2005_season1 group by MONTH({})'
+            elif interval == 'DAY':
+                sql = 'select {},{},{},{},count({}) from websales2005_season1 group by DAYOFMONTH({})'
+            elif interval == 'HOUR':
+                sql = 'select {},{},{},{},count({}) from websales2005_season1 group by HOUR({})'
+            elif interval == 'MINUTE':
+                sql = 'select {},{},{},{},count({}) from websales2005_season1 group by MINUTE({})'
+            elif interval == 'SECOND':
+                sql = 'select {},{},{},{},count({}) from websales2005_season1 group by SECOND({})'
+
+            results = [e for e in kylin_engine.execute(
+                    sql
+                    .format(new_table.names[0], new_table.names[1], new_table.names[2], new_table.names[3], new_table.names[5], new_table.names[5]))]
+            index = 0
+            for item in results:
+                new_table.D.append(list(item))
+                new_table.D[index].append(bins[index][0])
+                index += 1
         return new_table
 
-    def dealWithHourBin(self, column_id, begin, end, get_head, get_data):
+    def dealWithHourBin(self, column_id, begin, end, get_head, get_data, kylin_engine=None):
         new_table = Table(self.instance, True, 'BIN ' + self.names[column_id] + ' BY HOUR', '')
         if get_head:
             new_table.column_num = 2
@@ -368,36 +416,39 @@ class Table(object):
                         new_table.types.extend([Type.numerical, Type.numerical])
                     new_table.origins.extend([i, i])
         if get_data:
-            num = 0
-            new_table.D = [[str(i), 0] for i in range(24)]
-            for i in range(self.column_num):
-                if self.types[i] == Type.numerical:
-                    num += 2
-                    for j in range(24):
-                        new_table.D[j].extend([0, 0])
-            for i in range(begin, end):
-                hour = self.D[i][column_id].hour
-                new_table.D[hour][1] += 1
-                sum_column = 2
-                for j in range(self.column_num):
-                    if self.types[j] == Type.numerical:
-                        new_table.D[hour][sum_column] += self.D[i][j]
-                        sum_column += 2
-            for i in range(24):
-                for j in range(2, num + 2, 2):
-                    if new_table.D[i][1]:
-                        new_table.D[i][j + 1] = 1.0 * new_table.D[i][j] / new_table.D[i][1]
+            # num = 0
+            # new_table.D = [[str(i), 0] for i in range(24)]
+            # for i in range(self.column_num):
+            #     if self.types[i] == Type.numerical:
+            #         num += 2
+            #         for j in range(24):
+            #             new_table.D[j].extend([0, 0])
+            # for i in range(begin, end):
+            #     hour = self.D[i][column_id].hour
+            #     new_table.D[hour][1] += 1
+            #     sum_column = 2
+            #     for j in range(self.column_num):
+            #         if self.types[j] == Type.numerical:
+            #             new_table.D[hour][sum_column] += self.D[i][j]
+            #             sum_column += 2
+            # for i in range(24):
+            #     for j in range(2, num + 2, 2):
+            #         if new_table.D[i][1]:
+            #             new_table.D[i][j + 1] = 1.0 * new_table.D[i][j] / new_table.D[i][1]
+            sql = 'select {},{},{},{},count({}),HOUR({}) from websales2005_season1 group by HOUR({})'
+            results = [e for e in kylin_engine.execute(
+                sql
+                    .format(new_table.names[2], new_table.names[3], new_table.names[4], new_table.names[5], self.names[column_id], self.names[column_id], self.names[column_id]))]
+            for item in results:
+                new_table.D.append(list(item))
         return new_table
 
-    def dealWithWeekBin(self, column_id, begin, end, get_head, get_data):
+    def dealWithWeekBin(self, column_id, begin, end, get_head, get_data, kylin_engine=None):
         weekdays = ['Mon', 'Tue', 'Wed', 'Thur', 'Fri', 'Sat', 'Sun']
         new_table = Table(self.instance, True, 'BIN ' + self.names[column_id] + ' BY WEEKDAY', '')
         if get_head:
             new_table.column_num = 2
             new_table.tuple_num = 7
-            new_table.names.extend([self.names[column_id], 'CNT(' + self.names[column_id] + ')'])
-            new_table.types.extend([Type.categorical, Type.numerical])
-            new_table.origins.extend([column_id, column_id])
             for i in range(self.column_num):
                 if self.types[i] == Type.numerical:
                     new_table.column_num += 2
@@ -407,29 +458,41 @@ class Table(object):
                     else:
                         new_table.types.extend([Type.numerical, Type.numerical])
                     new_table.origins.extend([i, i])
+            new_table.names.extend(['CNT(' + self.names[column_id] + ')', self.names[column_id]])
+            new_table.types.extend([Type.numerical, Type.categorical])
+            new_table.origins.extend([column_id, column_id])
         if get_data:
-            num = 0
-            new_table.D = [[weekdays[i], 0] for i in range(7)]
-            for i in range(self.column_num):
-                if self.types[i] == Type.numerical:
-                    num += 2
-                    for j in range(7):
-                        new_table.D[j].extend([0, 0])
-            for i in range(begin, end):
-                weekday = self.D[i][column_id].weekday()
-                new_table.D[weekday][1] += 1
-                sum_column = 2
-                for j in range(self.column_num):
-                    if self.types[j] == Type.numerical:
-                        new_table.D[weekday][sum_column] += self.D[i][j]
-                        sum_column += 2
-            for i in range(7):
-                for j in range(2, num + 2, 2):
-                    if new_table.D[i][1]:
-                        new_table.D[i][j + 1] = 1.0 * new_table.D[i][j] / new_table.D[i][1]
+            # num = 0
+            # new_table.D = [[weekdays[i], 0] for i in range(7)]
+            # for i in range(self.column_num):
+            #     if self.types[i] == Type.numerical:
+            #         num += 2
+            #         for j in range(7):
+            #             new_table.D[j].extend([0, 0])
+            # for i in range(begin, end):
+            #     weekday = self.D[i][column_id].weekday()
+            #     new_table.D[weekday][1] += 1
+            #     sum_column = 2
+            #     for j in range(self.column_num):
+            #         if self.types[j] == Type.numerical:
+            #             new_table.D[weekday][sum_column] += self.D[i][j]
+            #             sum_column += 2
+            # for i in range(7):
+            #     for j in range(2, num + 2, 2):
+            #         if new_table.D[i][1]:
+            #             new_table.D[i][j + 1] = 1.0 * new_table.D[i][j] / new_table.D[i][1]
+            sql = 'select {},{},{},{},count({}) from websales2005_season1 group by DAYOFWEEK({})'
+            results = [e for e in kylin_engine.execute(
+                sql
+                    .format(new_table.names[0], new_table.names[1], new_table.names[2], new_table.names[3], new_table.names[5], new_table.names[5]))]
+            index = 0
+            for item in results:
+                new_table.D.append(list(item))
+                new_table.D[index].append(weekdays[index])
+                index += 1
         return new_table
 
-    def dealWithPNBin(self, column_id, begin, end, get_head, get_data):
+    def dealWithPNBin(self, column_id, begin, end, get_head, get_data, kylin_engine=None):
         new_table = Table(self.instance, True, 'BIN ' + self.names[column_id] + ' BY ZERO', '')
         if get_head:
             new_table.column_num = new_table.tuple_num = 2
@@ -469,10 +532,10 @@ class Table(object):
             begin_id = end_id
         return new_table
 
-    def dealWithTable(self):
+    def dealWithTable(self, kylin_engine=None):
         new_tables = []
 
-        self.generateViews()
+        self.generateViews(kylin_engine)
 
         if self.transformed:
             return new_tables
@@ -481,17 +544,17 @@ class Table(object):
             for i in range(self.column_num):
                 if self.features[i].ratio < 1.0 and (self.types[i] == Type.temporal or (
                         self.types[i] == Type.categorical and self.features[i].distinct <= 20)):
-                    new_tables.append(self.dealWithGroup(i, 0, self.tuple_num, True, True))
+                    new_tables.append(self.dealWithGroup(i, 0, self.tuple_num, True, True, kylin_engine))
 
                 if self.types[i] == Type.temporal:
-                    new_tables.append(self.dealWithIntervalBin(i, 0, self.tuple_num, True, True))
-                    new_tables.append(self.dealWithWeekBin(i, 0, self.tuple_num, True, True))
+                    new_tables.append(self.dealWithIntervalBin(i, 0, self.tuple_num, True, True, kylin_engine))
+                    new_tables.append(self.dealWithWeekBin(i, 0, self.tuple_num, True, True, kylin_engine))
                     if type(self.features[i].minmin) != type(datetime.date(1995, 10, 11)):
-                        new_tables.append(self.dealWithHourBin(i, 0, self.tuple_num, True, True))
+                        new_tables.append(self.dealWithHourBin(i, 0, self.tuple_num, True, True, kylin_engine))
 
                 if self.types[i] == Type.numerical and self.features[i].minmin < 0:
-                    new_tables.append(self.dealWithPNBin(i, 0, self.tuple_num, True, True))
-
+                    new_tables.append(self.dealWithPNBin(i, 0, self.tuple_num, True, True, kylin_engine))
+            '''
             for i in range(self.column_num):
                 if self.types[i] != Type.categorical or self.features[i].distinct > 12:
                     continue
@@ -499,7 +562,7 @@ class Table(object):
                 ######for categorized scatter########
                 new_table = Table(self.instance, True, 'GROUP BY ' + self.names[i], '')
                 new_table.tuple_num = self.tuple_num
-                new_table.D = [[] for tuple in range(self.tuple_num)]
+                # new_table.D = [[] for tuple in range(self.tuple_num)]
                 new_table.classify_id = i
                 new_table.classify_num = self.features[i].distinct
                 new_table.classes = self.features[i].distinct_values
@@ -509,20 +572,24 @@ class Table(object):
                         new_table.types.append(Type.numerical)
                         new_table.origins.append(j)
                         new_table.column_num += 1
-                        for k in range(self.tuple_num):
-                            new_table.D[k].append(self.D[k][j])
-                new_tables.append(new_table)
-                ######for categorized scatter########
+                        # for k in range(self.tuple_num):
+                        #     new_table.D[k].append(self.D[k][j])
+                        sql = 'select SUM({}),AVG({}),{} from websales2005_season1 group by {}'
+                        results = [e for e in kylin_engine.execute(
+                            sql
+                            .format(self.names[j], self.names[j], self.names[i], self.names[i]))]
+                        for item in results:
+                            new_table.D.append(list(item))
+                # new_tables.append(new_table)
+                ######for categorized bar########
                 for j in range(self.column_num):
                     if i == j:
                         continue
-                    if (self.types[j] == Type.categorical and self.features[j].distinct <= 20) or self.types[
-                        j] == Type.temporal:
+                    if (self.types[j] == Type.categorical and self.features[j].distinct <= 20) or self.types[j] == Type.temporal:
                         s = set()
-                        for k in range(self.tuple_num):
-                            s.add((self.D[k][i], self.D[k][j]))
-                        if len(s) > self.features[j].distinct and ((self.types[j] == Type.categorical and self.features[
-                            i].distinct <= self.features[j].distinct) or self.types[j] == Type.temporal):
+                        # for k in range(self.tuple_num):
+                        #     s.add((self.D[k][i], self.D[k][j]))
+                        if len(s) > self.features[j].distinct and ((self.types[j] == Type.categorical and self.features[i].distinct <= self.features[j].distinct) or self.types[j] == Type.temporal):
                             if len(s) == self.instance.tuple_num:
                                 new_table = self.getClassifyTable(i, j, self.dealWithGroup, False)
                             else:
@@ -537,5 +604,5 @@ class Table(object):
 
                     if self.types[j] == Type.numerical and self.features[j].minmin < 0:
                         new_tables.append(self.getClassifyTable(i, j, self.dealWithPNBin, True))
-
+            '''
             return new_tables

@@ -27,5 +27,5 @@ urlpatterns = [
     url('index', views.index),
     url('titan', views.titan),
     url('favicon.ico',  RedirectView.as_view(url=r'static/icon.png')),
-    url('', views.index)
+    url('', views.crime)
 ]

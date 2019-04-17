@@ -10,9 +10,12 @@ from view import Chart
 from features import Type
 import types
 from ml.timer import venloji_timer
+import sqlalchemy as sa
+
 
 
 def execute(*argv):
+    kylin_engine = sa.create_engine('kylin://ADMIN:KYLIN@master:7070/bigbench', connect_args={'is_ssl': False, 'timeout': 60})
     with venloji_timer('Whole'):
         # read data from database
         with venloji_timer('Read Data'):
@@ -20,27 +23,27 @@ def execute(*argv):
             # print dbArgs
             instance = Instance(argv[6])
             instance.addTable(Table(instance, False, '', ''))
-            conn = MySQLdb.connect(host=dbArgs[0], port=int(dbArgs[1]), user=dbArgs[2], passwd=dbArgs[3], db=dbArgs[4],
-                                   charset='utf8')
-            cur = conn.cursor()
+            # conn = MySQLdb.connect(host=dbArgs[0], port=int(dbArgs[1]), user=dbArgs[2], passwd=dbArgs[3], db=dbArgs[4],
+            #                        charset='utf8')
+            # cur = conn.cursor()
             instance.column_num = instance.tables[0].column_num = (len(argv) - 8) / 2
             for i in range(0, instance.column_num):
                 instance.tables[0].names.append(argv[8 + i])
                 instance.tables[0].types.append(Type.getType(argv[8 + i + instance.column_num].lower()))
             instance.tables[0].origins = [i for i in range(instance.tables[0].column_num)]
-            instance.tuple_num = instance.tables[0].tuple_num = cur.execute(argv[7])
-            instance.tables[0].D = map(list, cur.fetchall())
-            cur.close()
-            conn.close()
+            instance.tuple_num = instance.tables[0].tuple_num = [e for e in kylin_engine.execute('select count(*) from websales2005_season1')][0][0]#cur.execute(argv[7])
+            # instance.tables[0].D = map(list, cur.fetchall())
+            # cur.close()
+            # conn.close()
             # if table == none ===> exit
-            if len(instance.tables[0].D) == 0:
-                print '{}'
-                sys.exit(0)
+            # if len(instance.tables[0].D) == 0:
+            #     print '{}'
+            #     sys.exit(0)
 
         # get all views and their score
         with venloji_timer('Solve'):
             with venloji_timer('-Enumerate Tables'):
-                instance.addTables(instance.tables[0].dealWithTable())
+                instance.addTables(instance.tables[0].dealWithTable(kylin_engine=kylin_engine))
                 begin_id = 1
                 while begin_id < instance.table_num:
                     instance.tables[begin_id].dealWithTable()
