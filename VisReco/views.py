@@ -34,7 +34,7 @@ def crime(request):
                       'root',
                       'root',
                       'test',
-                      'sales',
+                      'websales2005_season1',
                       "SELECT * FROM sales",
                       'price',
                       'itemname',

@@ -11,6 +11,7 @@ from features import Type
 import types
 from ml.timer import venloji_timer
 import sqlalchemy as sa
+from kylin_util import kylin_util
 
 
 
@@ -31,7 +32,8 @@ def execute(*argv):
                 instance.tables[0].names.append(argv[8 + i])
                 instance.tables[0].types.append(Type.getType(argv[8 + i + instance.column_num].lower()))
             instance.tables[0].origins = [i for i in range(instance.tables[0].column_num)]
-            instance.tuple_num = instance.tables[0].tuple_num = [e for e in kylin_engine.execute('select count(*) from websales2005_season1')][0][0]#cur.execute(argv[7])
+            instance.tuple_num = instance.tables[0].tuple_num = kylin_util.executeQuery('select count(*) from {}'.format(instance.tale_name))[0][0]
+            #cur.execute(argv[7])
             # instance.tables[0].D = map(list, cur.fetchall())
             # cur.close()
             # conn.close()
@@ -43,7 +45,7 @@ def execute(*argv):
         # get all views and their score
         with venloji_timer('Solve'):
             with venloji_timer('-Enumerate Tables'):
-                instance.addTables(instance.tables[0].dealWithTable(kylin_engine=kylin_engine))
+                instance.addTables(instance.tables[0].dealWithTable())
                 begin_id = 1
                 while begin_id < instance.table_num:
                     instance.tables[begin_id].dealWithTable()

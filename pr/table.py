@@ -2,7 +2,7 @@ import datetime
 from features import Features, Type
 from view import View, Chart
 from ml.timer import venloji_timer
-import sqlalchemy as sa
+from kylin_util import kylin_util
 
 month = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'June', 'July', 'Aug', 'Sept', 'Oct', 'Nov', 'Dec']
 
@@ -112,7 +112,7 @@ class Table(object):
         f.interval_bins = bins
         f.bin_num = len(bins)
 
-    def generateViews(self, kylin_engine=None):
+    def generateViews(self):
         with venloji_timer('  -1. Feature extraction'):
             T = map(list, zip(*self.D))
             if self.transformed:
@@ -158,7 +158,8 @@ class Table(object):
 
                     # calculate min,max for numerical,temporal
                     if f.type == Type.numerical or f.type == Type.temporal:
-                        results = [e for e in kylin_engine.execute('select min({0}), max({0}) from websales2005_season1'.format(self.names[column_id]))]
+                        sql = 'select min({0}), max({0}) from {1}'.format(self.names[column_id], self.instance.tale_name)
+                        results = kylin_util.executeQuery(sql)
                         f.min, f.max = results[0][0], results[0][1]
                         f.minmin = f.min
                         if f.min == f.max:
@@ -169,7 +170,8 @@ class Table(object):
                     # d = {}
                     # calculate distinct,ratio for categorical,temporal
                     if f.type == Type.categorical :
-                        results = [e for e in kylin_engine.execute('select count(distinct {0}) from websales2005_season1'.format(self.names[column_id]))]
+                        sql = 'select count(distinct {0}) from {1}'.format(self.names[column_id], self.instance.tale_name)
+                        results = kylin_util.executeQuery(sql)
                         f.distinct = results[0][0]
                         if f.distinct == 1 :
                             self.types[column_id] = f.type = Type.none
@@ -177,26 +179,28 @@ class Table(object):
                             continue
                         f.ratio = 1.0 * f.distinct / self.tuple_num
                         if f.distinct <= 100:
-                            f.distinct_values = [e for e in kylin_engine.execute('select {0} from websales2005_season1 group by {0}'.format(self.names[column_id]))]
+                            sql = 'select {0} from {1} group by {0}'.format(self.names[column_id], self.instance.tale_name)
+                            f.distinct_values = kylin_util.executeQuery(sql)
 
                     if f.type == Type.temporal:
                         self.getIntervalBins(f)
                         interval = f.interval
                         sql = ''
                         if interval == 'YEAR':
-                            sql = 'select YEAR({}) from websales2005_season1 group by YEAR({})'
+                            sql = 'select YEAR({0}) from {1} group by YEAR({0})'
                         elif interval == 'MONTH':
-                            sql = 'select MONTH({}) from websales2005_season1 group by MONTH({})'
+                            sql = 'select MONTH({0}) from {1} group by MONTH({0})'
                         elif interval == 'DAY':
-                            sql = 'select DAYOFMONTH({}) from websales2005_season1 group by DAYOFMONTH({})'
+                            sql = 'select DAYOFMONTH({0}) from {1} group by DAYOFMONTH({0})'
                         elif interval == 'HOUR':
-                            sql = 'select HOUR({}) from websales2005_season1 group by HOUR({})'
+                            sql = 'select HOUR({0}) from {1} group by HOUR({0})'
                         elif interval == 'MINUTE':
-                            sql = 'select MINUTE({}) from websales2005_season1 group by MINUTE({})'
+                            sql = 'select MINUTE({0}) from {1} group by MINUTE({0})'
                         elif interval == 'SECOND':
-                            sql = 'select SECOND({}) from websales2005_season1 group by SECOND({})'
+                            sql = 'select SECOND({0}) from {1} group by SECOND({0})'
+                        sql = sql.format(self.names[column_id], self.instance.tale_name)
 
-                        f.distinct_values = [e for e in kylin_engine.execute(sql.format(self.names[column_id], self.names[column_id]))]
+                        f.distinct_values = kylin_util.executeQuery(sql)
                         f.distinct = len(f.distinct_values)
 
                     self.features.append(f)
@@ -274,7 +278,7 @@ class Table(object):
 
             self.instance.view_num += self.view_num
 
-    def dealWithGroup(self, column_id, begin, end, get_head, get_data, kylin_engine=None, filter=None):
+    def dealWithGroup(self, column_id, begin, end, get_head, get_data, filter=None):
         new_table = Table(self.instance, True, 'GROUP BY ' + self.names[column_id], '')
         if get_head:
             new_table.column_num = 0
@@ -319,17 +323,26 @@ class Table(object):
             #     l.append(k)
             #     new_table.D.append(l)
             if filter:
-                results = [e for e in kylin_engine.execute(
-                    "select {},{},{},{},{} from websales2005_season1 where {} = '{}' group by {}"
-                        .format(new_table.names[0], new_table.names[1],
-                                new_table.names[2], new_table.names[3], new_table.names[4],
+                sql = \
+                    "select {},{},{},{},{} " \
+                    "from {} " \
+                    "where {} = '{}' " \
+                    "group by {}"\
+                        .format(new_table.names[0], new_table.names[1], new_table.names[2], new_table.names[3], new_table.names[4],
+                                self.instance.tale_name,
                                 filter['column'], filter['value'],
-                                new_table.names[4]))]
+                                new_table.names[4])
+                results = kylin_util.executeQuery(sql)
 
             else:
-                results = [e for e in kylin_engine.execute(
-                    'select {},{},{},{},{} from websales2005_season1 group by {}'
-                        .format(new_table.names[0], new_table.names[1], new_table.names[2], new_table.names[3], new_table.names[4], new_table.names[4]))]
+                sql = 'select {},{},{},{},{} ' \
+                      'from {} ' \
+                      'group by {}'\
+                    .format(new_table.names[0], new_table.names[1], new_table.names[2], new_table.names[3], new_table.names[4],
+                            self.instance.tale_name,
+                            new_table.names[4])
+                results = kylin_util.executeQuery(sql)
+
             for item in results:
                 new_table.D.append(list(item))
             if self.features[column_id].type == Type.temporal:
@@ -337,7 +350,7 @@ class Table(object):
             new_table.tuple_num = len(results)
         return new_table
 
-    def dealWithIntervalBin(self, column_id, begin, end, get_head, get_data, kylin_engine=None, filter=None):
+    def dealWithIntervalBin(self, column_id, begin, end, get_head, get_data, filter=None):
         bins = self.features[column_id].interval_bins
         bin_num = self.features[column_id].bin_num
         interval = self.features[column_id].interval
@@ -383,7 +396,7 @@ class Table(object):
             #         if bins[i][3]:
             #             new_table.D[i][j + 1] = 1.0 * new_table.D[i][j] / bins[i][3]
             #     new_table.D[i].extend([bins[i][3], bins[i][0]])
-            sql = 'select {},{},{},{} from websales2005_season1'
+            sql = 'select {},{},{},{} from {}'
             if filter:
                 sql += " where {}='{}'"
             if interval == 'YEAR':
@@ -400,15 +413,18 @@ class Table(object):
                 sql += ' group by SECOND({})'
 
             if filter:
-                results = [e for e in kylin_engine.execute(
+                results =kylin_util.executeQuery(
                     sql
                         .format(new_table.names[0], new_table.names[1], new_table.names[2], new_table.names[3],
+                                self.instance.tale_name,
                                 filter['column'], filter['value'],
-                                new_table.names[4]))]
+                                new_table.names[4]))
             else:
-                results = [e for e in kylin_engine.execute(
+                results = kylin_util.executeQuery(
                     sql
-                    .format(new_table.names[0], new_table.names[1], new_table.names[2], new_table.names[3], new_table.names[4]))]
+                    .format(new_table.names[0], new_table.names[1], new_table.names[2], new_table.names[3],
+                            self.instance.tale_name,
+                            new_table.names[4]))
             index = 0
             for item in results:
                 new_table.D.append(list(item))
@@ -417,7 +433,7 @@ class Table(object):
             new_table.tuple_num = len(results)
         return new_table
 
-    def dealWithHourBin(self, column_id, begin, end, get_head, get_data, kylin_engine=None, filter=None):
+    def dealWithHourBin(self, column_id, begin, end, get_head, get_data, filter=None):
         new_table = Table(self.instance, True, 'BIN ' + self.names[column_id] + ' BY HOUR', '')
         if get_head:
             new_table.column_num = 1
@@ -455,16 +471,23 @@ class Table(object):
             #         if new_table.D[i][1]:
             #             new_table.D[i][j + 1] = 1.0 * new_table.D[i][j] / new_table.D[i][1]
             if filter:
-                sql = "select {},{},{},{},HOUR({}) from websales2005_season1 where {}='{}' group by HOUR({})"
-                results = [e for e in kylin_engine.execute(
+                sql = "select {},{},{},{},HOUR({}) " \
+                      "from {} " \
+                      "where {}='{}' " \
+                      "group by HOUR({})"
+                results = kylin_util.executeQuery(
                     sql.format(new_table.names[0], new_table.names[1], new_table.names[2], new_table.names[3], self.names[column_id],
-                                filter['column'], filter['value'],
-                                self.names[column_id]))]
+                               self.instance.tale_name,
+                               filter['column'], filter['value'],
+                               self.names[column_id]))
             else:
-                sql = 'select {},{},{},{},HOUR({}) from websales2005_season1 group by HOUR({})'
-                results = [e for e in kylin_engine.execute(
-                    sql
-                        .format(new_table.names[0], new_table.names[1], new_table.names[2], new_table.names[3], self.names[column_id], self.names[column_id], self.names[column_id]))]
+                sql = 'select {},{},{},{},HOUR({}) ' \
+                      'from {} ' \
+                      'group by HOUR({})'
+                results = kylin_util.executeQuery(
+                    sql.format(new_table.names[0], new_table.names[1], new_table.names[2], new_table.names[3], self.names[column_id],
+                               self.instance.tale_name,
+                               self.names[column_id]))
             i = 0
             for item in results:
                 new_table.D.append(list(item))
@@ -475,7 +498,7 @@ class Table(object):
             new_table.tuple_num = len(results)
         return new_table
 
-    def dealWithWeekBin(self, column_id, begin, end, get_head, get_data, kylin_engine=None, filter=None):
+    def dealWithWeekBin(self, column_id, begin, end, get_head, get_data, filter=None):
         weekdays = ['Mon', 'Tue', 'Wed', 'Thur', 'Fri', 'Sat', 'Sun']
         new_table = Table(self.instance, True, 'BIN ' + self.names[column_id] + ' BY WEEKDAY', '')
         if get_head:
@@ -514,17 +537,24 @@ class Table(object):
             #         if new_table.D[i][1]:
             #             new_table.D[i][j + 1] = 1.0 * new_table.D[i][j] / new_table.D[i][1]
             if filter:
-                sql = "select {},{},{},{} from websales2005_season1 where {}='{}' group by DAYOFWEEK({})"
-                results = [e for e in kylin_engine.execute(
+                sql = "select {},{},{},{} " \
+                      "from {} " \
+                      "where {}='{}' " \
+                      "group by DAYOFWEEK({})"
+                results = kylin_util.executeQuery(
+                    sql.format(new_table.names[0], new_table.names[1], new_table.names[2], new_table.names[3],
+                               self.instance.tale_name,
+                                filter['column'], filter['value'],
+                                new_table.names[4]))
+            else:
+                sql = 'select {},{},{},{} ' \
+                      'from {} ' \
+                      'group by DAYOFWEEK({})'
+                results = kylin_util.executeQuery(
                     sql
                         .format(new_table.names[0], new_table.names[1], new_table.names[2], new_table.names[3],
-                                filter['column'], filter['value'],
-                                new_table.names[4]))]
-            else:
-                sql = 'select {},{},{},{} from websales2005_season1 group by DAYOFWEEK({})'
-                results = [e for e in kylin_engine.execute(
-                    sql
-                        .format(new_table.names[0], new_table.names[1], new_table.names[2], new_table.names[3], new_table.names[4]))]
+                                self.instance.tale_name,
+                                new_table.names[4]))
             index = 0
             for item in results:
                 new_table.D.append(list(item))
@@ -533,7 +563,7 @@ class Table(object):
             new_table.tuple_num = len(results)
         return new_table
 
-    def dealWithPNBin(self, column_id, begin, end, get_head, get_data, kylin_engine=None, filter=None):
+    def dealWithPNBin(self, column_id, begin, end, get_head, get_data, filter=None):
         new_table = Table(self.instance, True, 'BIN ' + self.names[column_id] + ' BY ZERO', '')
         if get_head:
             new_table.column_num = new_table.tuple_num = 1
@@ -549,8 +579,8 @@ class Table(object):
                     new_table.D[1][1] += 1
         return new_table
 
-    def getClassifyTable(self, classify_id, x_id, f, agg, kylin_engine=None):
-        t = f(x_id, 0, 0, True, True, kylin_engine)
+    def getClassifyTable(self, classify_id, x_id, f, agg):
+        t = f(x_id, 0, 0, True, True)
         new_table = Table(self.instance, True, 'GROUP BY ' + self.names[classify_id], t.describe1)
         new_table.tuple_num, new_table.column_num = t.tuple_num * self.features[classify_id].distinct, t.column_num
         new_table.names, new_table.types, new_table.origins = t.names[:], t.types[:], t.origins[:]
@@ -567,16 +597,16 @@ class Table(object):
                     new_table.types[k] = Type.none
 
         for k in range(self.features[classify_id].distinct):
-            new_table.D.extend(f(x_id, 0, self.tuple_num, True, True, kylin_engine,
+            new_table.D.extend(f(x_id, 0, self.tuple_num, True, True,
                                  {"column": self.names[classify_id],
                                   "value": self.features[classify_id].distinct_values[k][0]}
                                  ).D)
         return new_table
 
-    def dealWithTable(self, kylin_engine=None):
+    def dealWithTable(self):
         new_tables = []
 
-        self.generateViews(kylin_engine)
+        self.generateViews()
 
         if self.transformed:
             return new_tables
@@ -585,16 +615,16 @@ class Table(object):
             for i in range(self.column_num):
                 if self.features[i].ratio < 1.0 and (self.types[i] == Type.temporal or (
                         self.types[i] == Type.categorical and self.features[i].distinct <= 20)):
-                    new_tables.append(self.dealWithGroup(i, 0, self.tuple_num, True, True, kylin_engine))
+                    new_tables.append(self.dealWithGroup(i, 0, self.tuple_num, True, True))
 
                 if self.types[i] == Type.temporal:
-                    new_tables.append(self.dealWithIntervalBin(i, 0, self.tuple_num, True, True, kylin_engine))
-                    new_tables.append(self.dealWithWeekBin(i, 0, self.tuple_num, True, True, kylin_engine))
+                    new_tables.append(self.dealWithIntervalBin(i, 0, self.tuple_num, True, True))
+                    new_tables.append(self.dealWithWeekBin(i, 0, self.tuple_num, True, True))
                     if type(self.features[i].minmin) != type(datetime.date(1995, 10, 11)):
-                        new_tables.append(self.dealWithHourBin(i, 0, self.tuple_num, True, True, kylin_engine))
+                        new_tables.append(self.dealWithHourBin(i, 0, self.tuple_num, True, True))
 
                 if self.types[i] == Type.numerical and self.features[i].minmin < 0:
-                    new_tables.append(self.dealWithPNBin(i, 0, self.tuple_num, True, True, kylin_engine))
+                    new_tables.append(self.dealWithPNBin(i, 0, self.tuple_num, True, True))
 
             for i in range(self.column_num):
                 if self.types[i] != Type.categorical or self.features[i].distinct > 12:
@@ -616,10 +646,10 @@ class Table(object):
                         new_table.column_num += 1
                         # for k in range(self.tuple_num):
                         #     new_table.D[k].append(self.D[k][j])
-                        sql = 'select SUM({}),AVG({}),{} from websales2005_season1 group by {}'
+                        sql = 'select SUM({}),AVG({}),{} from {} group by {}'
                         results = [e for e in kylin_engine.execute(
                             sql
-                            .format(self.names[j], self.names[j], self.names[i], self.names[i]))]
+                            .format(self.names[j], self.names[j], self.names[i], self.instance.tale_name,self.names[i]))]
                         for item in results:
                             new_table.D.append(list(item))
                 new_tables.append(new_table)
@@ -630,16 +660,16 @@ class Table(object):
                         continue
                     if (self.types[j] == Type.categorical and self.features[j].distinct <= 20) or self.types[j] == Type.temporal:
                         if ((self.types[j] == Type.categorical and self.features[i].distinct <= self.features[j].distinct) or self.types[j] == Type.temporal):
-                            new_table = self.getClassifyTable(i, j, self.dealWithGroup, True, kylin_engine)
+                            new_table = self.getClassifyTable(i, j, self.dealWithGroup, True)
                             new_tables.append(new_table)
 
                     if self.types[j] == Type.temporal:
-                        new_tables.append(self.getClassifyTable(i, j, self.dealWithIntervalBin, True, kylin_engine))
-                        new_tables.append(self.getClassifyTable(i, j, self.dealWithWeekBin, True, kylin_engine))
+                        new_tables.append(self.getClassifyTable(i, j, self.dealWithIntervalBin, True))
+                        new_tables.append(self.getClassifyTable(i, j, self.dealWithWeekBin, True))
                         if type(self.features[j].minmin) != type(datetime.date(1995, 10, 11)):
-                            new_tables.append(self.getClassifyTable(i, j, self.dealWithHourBin, True, kylin_engine))
+                            new_tables.append(self.getClassifyTable(i, j, self.dealWithHourBin, True))
 
                     if self.types[j] == Type.numerical and self.features[j].minmin < 0:
-                        new_tables.append(self.getClassifyTable(i, j, self.dealWithPNBin, True, kylin_engine))
+                        new_tables.append(self.getClassifyTable(i, j, self.dealWithPNBin, True))
 
             return new_tables
